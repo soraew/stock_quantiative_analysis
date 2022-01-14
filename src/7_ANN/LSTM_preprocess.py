@@ -35,6 +35,8 @@ from collections import Counter
 
 
 
+
+
 # set index as datetime
 def date_index_nasdaq(nasdaq):
     nasdaq_c = nasdaq.copy()
@@ -119,7 +121,7 @@ def get_train_df(nasdaq, using, features):
             col_one.append(element)
     col_two = list(features)*len(using)
     # print(len(col_one), len(col_two))
-    
+
     # scaling 
     scaler = MinMaxScaler((-1, 1))
     scaled = scaler.fit_transform(df_features_arr)
