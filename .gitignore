@@ -1,5 +1,8 @@
 # my lines here #
 *.csv
+*.pt
+*.png
+.DS_Store
 #################
 # Byte-compiled / optimized / DLL files
 __pycache__/
