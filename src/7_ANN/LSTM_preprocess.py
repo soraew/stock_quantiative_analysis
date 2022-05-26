@@ -6,19 +6,20 @@ from statsmodels.graphics.tsaplots import plot_pacf
 # ML stuff
 import numpy as np
 from numpy.fft import *
-import torch
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error
 from sklearn.linear_model import Lasso
 import pandas as pd
 import lightgbm as lgb
+
 
 # DL stuff
 from torch.autograd import Variable
 from fastprogress import master_bar, progress_bar
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 
 # plotting
@@ -26,15 +27,15 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 
+
 # basic stuff
 import datetime
-import requests
 import io
+import os
+from os.path import join
 from collections import Counter
-
-
-
-
+from tqdm import tqdm
+import gc
 
 
 # set index as datetime
@@ -44,14 +45,11 @@ def date_index_nasdaq(nasdaq):
     nasdaq_c.set_index(dates, inplace=True)
     # set date as index
     nasdaq_c.drop("Date", axis=1, inplace=True)
+    # ここでFBとかTESLAとかに合わせている
     nasdaq_c = nasdaq_c["2012-05-18":]
     return nasdaq_c
 
-############## REINDEX FUNCTION AND PREPARE_STOCK FUNCTION ARE PRETTY MUCH SAME, HOWEVER, I PREFER THE PRIOR ##################
-# for ARIMA or some shit    
-def reindex(df):
-    return df.reindex(pd.date_range(df.index[0], df.index[-1])).fillna(method="ffill")
-
+################### PREPARE STOCK FROOM DATAFRAME DIRECTLY TAKEN FROM CSV FILE #######################
 # for prepare_stock
 def date_range_df(start, end, column_name = "Time"):
     date_range = pd.date_range(start, end)
@@ -67,105 +65,34 @@ def prepare_stock(nasdaq, start, end, stock_name="AAPL", drop=True):
     if drop:
         new_nasdaq.dropna(inplace=True)
     return new_nasdaq
-#############################################################################################################################
+######################################################################################################
 
-# create features volatility, volume, adj close
-def get_features(nasdaq):
+# create log_Volatility, log_Volume, log_Adj_Close and drop Adj_Close if not included in features
+def get_features(df, features):
     #rename Adj Close
-    nasdaq.rename(columns={"Adj Close":"Adj_Close"}, inplace=True)
-    nasdaq["log_Volatility"] = np.log(nasdaq.High - nasdaq.Low + 1)
-    nasdaq["log_Volume"] = np.log(nasdaq.Volume + 1) 
-    nasdaq["log_Adj_Close"] = np.log(nasdaq["Adj_Close"] + 1)
-    # nasdaq["log_Adj_Close_diff"] = nasdaq["log_Adj_Close"].diff()
-    nasdaq.drop(columns = ["Low", "High", "Close", "Open", "Name", "Volume"], inplace=True)
-    # nasdaq.dropna(inplace = True)
-    return nasdaq
+    df.rename(columns={"Adj Close":"Adj_Close"}, inplace=True) 
+    df["log_Volatility"] = np.log(df.High - df.Low + 1)
+    df["log_Volume"] = np.log(df.Volume + 1) 
+    df["log_Adj_Close"] = np.log(df["Adj_Close"] + 1)
+    # df["day_of_week"] = np.array(list(map(lambda date: date.weekday(), df.index)))
+
+    if 'Adj_Close' not in features:
+        df.drop(columns=["Adj_Close"], inplace=True)
+
+    df.drop(columns = ["Low", "High", "Close", "Open", "Name", "Volume"], inplace=True)
+
+    return df
 
 # this will return feature engineered stock dataframe
-def get_stock(nasdaq, stock_name="AAPL"):
+def get_stock(nasdaq, features, stock_name="AAPL"):
     nasdaq_c = date_index_nasdaq(nasdaq)
     stock = prepare_stock(nasdaq_c, nasdaq_c.index[0], nasdaq_c.index[-1], stock_name)
-    stock = get_features(stock)
+    stock = get_features(stock, features)
     stock.fillna("ffill", inplace=True)
     return stock
 
-# plot heatmap for top stocks
-def plot_attribute(nasdaq, using,feature="log_Adj_Close"):
-    stocks = pd.DataFrame()
-    for name in using:
-        stocks[name] = get_stock(nasdaq, name)[feature]
-    stocks.dropna(inplace=True)
-    stocks.plot()
-    plt.show()
 
-####### In the 2 functions below, we are adding weekday however ###########
-####### prob we could have done this in like get_stock or something #######
-# the main difference between the two is , the prior is just adding weekday at the end,
-# whereas the latter function is adding it to every stock
-def get_train_df(nasdaq, using, features):
-    df_features_arr = reindex(get_stock(nasdaq, using[0])).to_numpy().T
-    for name in using[1:]:
-        adding = reindex(get_stock(nasdaq, name)).to_numpy().T
-        df_features_arr = np.concatenate([df_features_arr, adding])
-    df_features_arr = df_features_arr.T
-
-    ## df_features = pd.DataFrame(data=df_features_arr, columns=pd.MultiIndex.from_tuples(zip(col_one, col_two)))
-    
-    # making columns
-    # features must not include weekday here
-    if "weekday" in features:
-        features.remove("weekday")
-    col_one = []
-    for element in using:
-        for i in range(len(features)):
-            col_one.append(element)
-    col_two = list(features)*len(using)
-    # print(len(col_one), len(col_two))
-
-    # scaling 
-    scaler = MinMaxScaler((-1, 1))
-    scaled = scaler.fit_transform(df_features_arr)
-    df_features = pd.DataFrame(data=scaled, columns=pd.MultiIndex.from_tuples(zip(col_one, col_two)))
-
-    df_features.index = pd.date_range("2012-05-18", "2021-09-10")
-
-    day_of_week = np.array(list(map(lambda date: date.weekday(), df_features.index)))
-    day_of_week = day_of_week.reshape(-1, 1)
-    day_of_week = pd.Series(data=scaler.fit_transform(day_of_week).reshape(-1,), index = df_features.index)
-    df_features["weekday"] = day_of_week
-    if "weekday" not in features:
-        features.append("weekday")
-
-    return df_features, features
-
-
-# for feeding into network
-def get_train_arr(nasdaq, using, features):
-    df_features_arr = []
-    for name in using:
-        arr = reindex(get_stock(nasdaq, name)).to_numpy()
-        # scaling for each column, for each stock_df in nasdaq
-        scaler = MinMaxScaler(feature_range=(-1, 1))
-        arr_scaled = scaler.fit_transform(arr)    
-
-        # adding day of week
-        day_of_week = np.array(list(map(lambda date: date.weekday(), pd.date_range("2012-05-18", "2021-09-10"))))
-        day_of_week = day_of_week.reshape(-1, 1)
-        day_of_week = scaler.fit_transform(day_of_week)
-      
-        arr_scaled = np.concatenate([arr_scaled, day_of_week], axis=1)
-
-        df_features_arr.append(arr_scaled)
-
-
-    df_features_arr = np.array(df_features_arr)
-    if "weekday" not in features:
-        features.append("weekday")
-    df_features_arr = df_features_arr.reshape(-1, len(features), 7)
-
-    return df_features_arr, features
-
-
+# get features with sliding window
 def sliding_windows_mutli_features(data, seq_length, target_cols_ids):
     x = []
     y = []
@@ -179,6 +106,21 @@ def sliding_windows_mutli_features(data, seq_length, target_cols_ids):
 
     return np.array(x), np.array(y)
 
+# sliding windows for one feature
+def sliding_windows_single_feature(X, y, seq_length):
+    x = []
+    Y = []
+
+    for i in range((X.shape[0])-seq_length-1):
+        #change here after finishing feature engineering process
+        _x = X[i:(i+seq_length), :] 
+        _y = y[i+seq_length] ## column 1 contains the labbel(log_Adj_Close)
+        x.append(_x)
+        Y.append(_y)
+
+    return np.array(x), np.array(Y)
+
+# get predictor and target variable in np arrays
 def get_Xy(df, window_size):
     log_adj_close_cols_ids = []
     volatility_cols_ids = []
@@ -220,3 +162,48 @@ def get_train_test(x, y, train_ratio):
 
     return trainX, trainY, testX, testY
 
+
+def check_mkdir(dir_name):
+    if not os.path.exists(dir_name):
+        os.mkdir(dir_name)
+
+
+def binary_y(y_np, criterion):
+    for i in range(len(y_np)):
+        if y_np[i] > criterion:
+            y_np[i] = int(1)
+        else:
+            y_np[i] = int(0)
+    return y_np
+
+
+# get binary class for stocks 
+def get_bc_per_stock_Xy(nasdaq, features, stock_name, train_ratio):
+    stock = get_stock(nasdaq, features, stock_name)
+
+    stock_new = stock.copy()
+    stock_log_adj = stock["log_Adj_Close"]
+    stock_log_adj_diff = stock_log_adj.shift(-1) - stock_log_adj
+    stock_new["log_Adj_Close"] = stock_log_adj_diff # tomorrow - today
+    X = stock_new
+    y = stock_new["log_Adj_Close"].iloc[1:-1] #　そのまま, getting rid of nan although ind 0 is not nan for y
+    X["log_Adj_Close"] = stock_new["log_Adj_Close"].shift(1) # today - yesterday
+    X = X.iloc[1:-1] # getting rid of nans
+    new_index = y.index
+
+    scaler = MinMaxScaler(feature_range=(-1, 1))
+    X = scaler.fit_transform(X)
+    y = scaler.fit_transform(y.to_numpy().reshape(-1,1))
+
+    # to 1 and 0 two class classification
+    X[:, 2] = binary_y(X[:, 2], c)
+    y = binary_y(y, c)
+
+    X, y = sliding_windows_single_feature(X, y, 50)
+
+    train_size = int(X.shape[0]*train_ratio)
+    
+    X_train, X_test = X[:train_size, :, :], X[train_size:, :, :]
+    y_train, y_test = y[:train_size], y[train_size:]
+    
+    return X_train, X_test, y_train, y_test
