@@ -1,4 +1,4 @@
-data_root = "/kaggle/input/nasdaq100-stock-price-data/"
+data_root = "../../data/"
 #stats stuff
 from statsmodels.graphics.tsaplots import plot_acf
 from statsmodels.graphics.tsaplots import plot_pacf
@@ -37,9 +37,6 @@ from collections import Counter
 from tqdm import tqdm
 import gc
 
-########################################################################
-################## this cell is dedicated to kaggle ####################
-########################################################################
 
 # set index as datetime
 def date_index_nasdaq(nasdaq):
@@ -52,11 +49,7 @@ def date_index_nasdaq(nasdaq):
     nasdaq_c = nasdaq_c["2012-05-18":]
     return nasdaq_c
 
-############## REINDEX FUNCTION AND PREPARE_STOCK FUNCTION ARE PRETTY MUCH SAME, HOWEVER, I PREFER THE PRIOR ##################
-# for ARIMA or some shit    
-def reindex(df):
-    return df.reindex(pd.date_range(df.index[0], df.index[-1])).fillna(method="ffill")
-
+################### PREPARE STOCK FROOM DATAFRAME DIRECTLY TAKEN FROM CSV FILE #######################
 # for prepare_stock
 def date_range_df(start, end, column_name = "Time"):
     date_range = pd.date_range(start, end)
@@ -72,7 +65,7 @@ def prepare_stock(nasdaq, start, end, stock_name="AAPL", drop=True):
     if drop:
         new_nasdaq.dropna(inplace=True)
     return new_nasdaq
-#############################################################################################################################
+######################################################################################################
 
 # create log_Volatility, log_Volume, log_Adj_Close and drop Adj_Close if not included in features
 def get_features(df, features):
@@ -85,12 +78,9 @@ def get_features(df, features):
 
     if 'Adj_Close' not in features:
         df.drop(columns=["Adj_Close"], inplace=True)
-    # nasdaq["log_Adj_Close_diff"] = nasdaq["log_Adj_Close"].diff()
 
     df.drop(columns = ["Low", "High", "Close", "Open", "Name", "Volume"], inplace=True)
-    # nasdaq = nasdaq[features]
 
-    # nasdaq.dropna(inplace = True)
     return df
 
 # this will return feature engineered stock dataframe
@@ -101,18 +91,8 @@ def get_stock(nasdaq, features, stock_name="AAPL"):
     stock.fillna("ffill", inplace=True)
     return stock
 
-# plot heatmap for top stocks
-def plot_attribute(nasdaq, using,feature="log_Adj_Close"):
-    stocks = pd.DataFrame()
-    for name in using:
-        stocks[name] = get_stock(nasdaq, name)[feature]
-    stocks.dropna(inplace=True)
-    stocks.plot()
-    plt.show()
 
-
-
-
+# get features with sliding window
 def sliding_windows_mutli_features(data, seq_length, target_cols_ids):
     x = []
     y = []
@@ -126,6 +106,21 @@ def sliding_windows_mutli_features(data, seq_length, target_cols_ids):
 
     return np.array(x), np.array(y)
 
+# sliding windows for one feature
+def sliding_windows_single_feature(X, y, seq_length):
+    x = []
+    Y = []
+
+    for i in range((X.shape[0])-seq_length-1):
+        #change here after finishing feature engineering process
+        _x = X[i:(i+seq_length), :] 
+        _y = y[i+seq_length] ## column 1 contains the labbel(log_Adj_Close)
+        x.append(_x)
+        Y.append(_y)
+
+    return np.array(x), np.array(Y)
+
+# get predictor and target variable in np arrays
 def get_Xy(df, window_size):
     log_adj_close_cols_ids = []
     volatility_cols_ids = []
@@ -179,23 +174,10 @@ def binary_y(y_np, criterion):
             y_np[i] = int(1)
         else:
             y_np[i] = int(0)
-        
     return y_np
 
 
-def sliding_windows_single_feature(X, y, seq_length):
-    x = []
-    Y = []
-
-    for i in range((X.shape[0])-seq_length-1):
-        #change here after finishing feature engineering process
-        _x = X[i:(i+seq_length), :] 
-        _y = y[i+seq_length] ## column 1 contains the labbel(log_Adj_Close)
-        x.append(_x)
-        Y.append(_y)
-
-    return np.array(x), np.array(Y)
-
+# get binary class for stocks 
 def get_bc_per_stock_Xy(nasdaq, features, stock_name, train_ratio):
     stock = get_stock(nasdaq, features, stock_name)
 
@@ -225,5 +207,3 @@ def get_bc_per_stock_Xy(nasdaq, features, stock_name, train_ratio):
     y_train, y_test = y[:train_size], y[train_size:]
     
     return X_train, X_test, y_train, y_test
-
-
